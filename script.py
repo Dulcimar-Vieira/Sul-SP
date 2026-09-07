@@ -134,7 +134,7 @@ if response.status_code == 200:
                 elem.clear()
 
                 if len(jobs) >= 1000:
-                    if file_count > 5:
+                    if file_count > 1:
                         print("⛔ Limite de arquivos atingido")
                         break
 
