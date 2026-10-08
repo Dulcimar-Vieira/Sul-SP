@@ -1,162 +1,98 @@
-import requests
-import gzip
-import xml.etree.ElementTree as ET
-import io
-import json
-import os
-import hashlib
-import random
-import re
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import gzip, hashlib, io, json, os, random, re
 from datetime import datetime
+from zoneinfo import ZoneInfo
+import xml.etree.ElementTree as ET
+import requests
 
-feed_url = "https://feeds.whatjobs.com/sinerj/sinerj_pt_BR.xml.gz"
+FEED_URL = "https://feeds.whatjobs.com/sinerj/sinerj_pt_BR.xml.gz"
+OUTPUT_FOLDER = "json_parts"
+STATE_FILE = "daily_jobs_state.json"
+MAX_JOBS_PER_DAY = 100
+TIMEZONE = ZoneInfo("America/Sao_Paulo")
 
-json_folder = "json_parts"
-os.makedirs(json_folder, exist_ok=True)
+ESTADOS={"são paulo","paraná","santa catarina","rio grande do sul"}
+def matches(city,state,title,desc):
+    return norm(state) in ESTADOS and not (norm(state)=="são paulo" and norm(city)=="campinas")
 
-file_count = 1
-jobs = []
+def norm(s): return (s or "").strip().lower()
+def clean(s):
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    return re.sub(r"\s+", " ", s).strip()
 
-# Estados permitidos
-estados_permitidos = [
-    "são paulo",
-    "paraná",
-    "santa catarina",
-    "rio grande do sul"
-]
+def parse_date(s):
+    if not s: return None
+    s=s.strip()
+    for fmt in ("%d.%m.%Y","%d/%m/%Y","%Y-%m-%d","%Y-%m-%dT%H:%M:%S","%Y-%m-%dT%H:%M:%SZ"):
+        try: return datetime.strptime(s,fmt)
+        except ValueError: pass
+    try: return datetime.fromisoformat(s.replace("Z","+00:00"))
+    except ValueError: return None
 
-# Cidade bloqueada (somente SP)
-cidade_bloqueada = "campinas"
+def key(j):
+    return j["url"] or hashlib.md5(f'{j["title"]}|{j["company"]}|{j["city"]}'.encode()).hexdigest()
 
-headers = {
-    "User-Agent": "Mozilla/5.0 (compatible; FeedProcessor/1.0)"
-}
+def intro(title, city):
+    return random.choice([
+        f"Confira a vaga para {title} em {city}. Veja os detalhes e como se candidatar.",
+        f"Nova oportunidade para {title} em {city}. Saiba mais sobre essa vaga.",
+        f"Empresa está contratando {title} em {city}. Confira requisitos e envie seu currículo."
+    ])
 
-def normalizar(texto):
-    return texto.strip().lower()
+def load_state(today):
+    try:
+        with open(STATE_FILE,encoding="utf-8") as f: s=json.load(f)
+        return s.get("jobs",{}) if s.get("date")==today else {}
+    except (OSError,json.JSONDecodeError): return {}
 
-def gerar_id(titulo, empresa, cidade, url):
-    base = f"{titulo}-{empresa}-{cidade}-{url}"
-    return hashlib.md5(base.encode()).hexdigest()
+def save_state(today,jobs):
+    with open(STATE_FILE,"w",encoding="utf-8") as f:
+        json.dump({"date":today,"jobs":jobs},f,ensure_ascii=False,indent=2)
 
-def gerar_slug(titulo, cidade):
-    texto = f"{titulo}-{cidade}"
-    texto = texto.lower()
-    texto = re.sub(r"[^\w\s-]", "", texto)
-    texto = re.sub(r"\s+", "-", texto)
-    return texto
+def main():
+    today=datetime.now(TIMEZONE).date().isoformat()
+    selected=load_state(today)
+    r=requests.get(FEED_URL,headers={"User-Agent":"Mozilla/5.0 (compatible; FeedProcessor/1.0)"},timeout=60)
+    r.raise_for_status()
+    candidates={}
+    with gzip.open(io.BytesIO(r.content),"rt",encoding="utf-8") as f:
+        for _,elem in ET.iterparse(f,events=("end",)):
+            if elem.tag!="job": continue
+            title=elem.findtext("title","").strip()
+            desc=elem.findtext("description","").strip()
+            company=elem.findtext("company/name","").strip() or "Confidencial"
+            url=elem.findtext("urlDeeplink","").strip() or elem.findtext("link","").strip()
+            typ=elem.findtext("jobType","").strip()
+            loc=elem.find("locations/location")
+            city=loc.findtext("city","").strip() if loc is not None else ""
+            state=loc.findtext("state","").strip() if loc is not None else ""
+            pub=elem.findtext("pubdate","").strip()
+            dt=parse_date(pub)
+            if not title or not url or not city or not state or not dt or dt.date().isoformat()!=today or not matches(city,state,title,desc):
+                elem.clear(); continue
+            j={"id":hashlib.md5(f"{title}-{company}-{city}-{url}".encode()).hexdigest(),
+               "title":title,"description":intro(title,city)+"\n\n"+clean(desc),
+               "company":company,"city":city,"state":state,"tipo":typ,"url":url,
+               "data_publicacao":dt.date().isoformat(),"origem":"WhatJobs"}
+            candidates[key(j)]=j
+            elem.clear()
 
-def limpar_html(texto):
-    return re.sub(r"<[^>]+>", "", texto).strip()
+    for k in list(selected):
+        if k in candidates: selected[k]=candidates[k]
 
-def gerar_intro(titulo, cidade):
-    intros = [
-        f"Confira a vaga para {titulo} em {cidade}. Veja os detalhes e como se candidatar.",
-        f"Nova oportunidade para {titulo} em {cidade}. Saiba mais sobre essa vaga.",
-        f"Empresa está contratando {titulo} em {cidade}. Confira requisitos e envie seu currículo."
-    ]
-    return random.choice(intros)
+    novos=[j for k,j in candidates.items() if k not in selected]
+    novos.sort(key=lambda j:j["data_publicacao"],reverse=True)
+    for j in novos:
+        if len(selected)>=MAX_JOBS_PER_DAY: break
+        selected[key(j)]=j
 
-print("📥 Baixando feed...")
+    os.makedirs(OUTPUT_FOLDER,exist_ok=True)
+    for fn in os.listdir(OUTPUT_FOLDER):
+        if fn.endswith(".json"): os.remove(os.path.join(OUTPUT_FOLDER,fn))
+    with open(os.path.join(OUTPUT_FOLDER,"part_1.json"),"w",encoding="utf-8") as f:
+        json.dump(list(selected.values())[:MAX_JOBS_PER_DAY],f,ensure_ascii=False,indent=2)
+    save_state(today,selected)
+    print(f"Data: {today} | Encontradas hoje: {len(candidates)} | Selecionadas: {min(len(selected),MAX_JOBS_PER_DAY)}")
 
-try:
-    response = requests.get(feed_url, stream=True, headers=headers, timeout=30)
-except requests.RequestException as e:
-    print(f"Erro: {e}")
-    exit(1)
-
-if response.status_code == 200:
-    with gzip.open(io.BytesIO(response.content), "rt", encoding="utf-8") as f:
-
-        urls_vistas = set()
-
-        for event, elem in ET.iterparse(f, events=("end",)):
-            if elem.tag == "job":
-
-                title = elem.findtext("title", "").strip()
-                description = elem.findtext("description", "").strip()
-                company = elem.findtext("company/name", "").strip()
-                job_type = elem.findtext("jobType", "").strip()
-                url = elem.findtext("urlDeeplink", "").strip()
-
-                location_elem = elem.find("locations/location")
-                city = location_elem.findtext("city", "").strip() if location_elem is not None else ""
-                state = location_elem.findtext("state", "").strip() if location_elem is not None else ""
-
-                if not city or not state or not title or not url:
-                    elem.clear()
-                    continue
-
-                city_lower = normalizar(city)
-                state_lower = normalizar(state)
-
-                # 🔥 FILTRO PRINCIPAL
-                if state_lower not in estados_permitidos:
-                    elem.clear()
-                    continue
-
-                # 🔥 BLOQUEAR CAMPINAS SOMENTE EM SP
-                if state_lower == "são paulo" and city_lower == cidade_bloqueada:
-                    elem.clear()
-                    continue
-
-                if not company:
-                    company = "Confidencial"
-
-                # ❌ evitar duplicados
-                if url in urls_vistas:
-                    elem.clear()
-                    continue
-                urls_vistas.add(url)
-
-                description = limpar_html(description)
-                intro = gerar_intro(title, city)
-                descricao_final = intro + "\n\n" + description
-
-                job_id = gerar_id(title, company, city, url)
-                slug = gerar_slug(title, city)
-                data_publicacao = datetime.utcnow().isoformat()
-
-                job_data = {
-                    "id": job_id,
-                    "title": title,
-                    "slug": slug,
-                    "description": descricao_final,
-                    "company": company,
-                    "city": city,
-                    "state": state,
-                    "tipo": job_type,
-                    "url": url,
-                    "data_publicacao": data_publicacao
-                }
-
-                jobs.append(job_data)
-                elem.clear()
-
-                if len(jobs) >= 1000:
-                    if file_count > 5:
-                        print("⛔ Limite de arquivos atingido")
-                        break
-
-                    json_path = os.path.join(json_folder, f"part_{file_count}.json")
-
-                    with open(json_path, "w", encoding="utf-8") as json_file:
-                        json.dump(jobs, json_file, ensure_ascii=False, indent=2)
-
-                    print(f"✅ {json_path} gerado")
-
-                    jobs = []
-                    file_count += 1
-
-        if jobs:
-            json_path = os.path.join(json_folder, f"part_{file_count}.json")
-
-            with open(json_path, "w", encoding="utf-8") as json_file:
-                json.dump(jobs, json_file, ensure_ascii=False, indent=2)
-
-            print(f"✅ Último arquivo gerado")
-
-    print(f"📦 Total de arquivos: {file_count}")
-
-else:
-    print(f"Erro HTTP: {response.status_code}")
+if __name__=="__main__": main()
