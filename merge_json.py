@@ -37,10 +37,18 @@ for arquivo in arquivos:
         erros += 1
         print(f"❌ Erro em {arquivo}: {e}")
 
-# IMPORTANTE:
-# Sempre sobrescreve merged.json.
-# Assim o arquivo antigo com milhares de vagas não permanece publicado
-# quando a geração atual tiver 100, menos de 100 ou até 0 vagas.
+if erros > 0:
+    print("❌ Há erros nos arquivos JSON. O merged.json não será alterado.")
+    raise SystemExit(1)
+
+if not dados_totais:
+    print("❌ Nenhuma vaga foi encontrada. O merged.json existente será preservado.")
+    raise SystemExit(1)
+
+# Segurança: mesmo que apareça mais de um part_*.json,
+# o resultado final nunca passa de 100 vagas.
+dados_totais = dados_totais[:100]
+
 resultado = {
     "gerado_em": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "total_vagas": len(dados_totais),
@@ -53,6 +61,3 @@ with open(arquivo_saida, "w", encoding="utf-8") as f:
 tamanho_mb = os.path.getsize(arquivo_saida) / (1024 * 1024)
 print(f"✅ '{arquivo_saida}' atualizado com {len(dados_totais)} vagas.")
 print(f"📄 Tamanho: {tamanho_mb:.2f} MB")
-
-if erros > 0:
-    print(f"⚠️ {erros} arquivo(s) apresentaram erro.")
