@@ -7,6 +7,7 @@ import os
 import hashlib
 import random
 import re
+import unicodedata
 from datetime import datetime
 
 feed_url = "https://feeds.whatjobs.com/sinerj/sinerj_pt_BR.xml.gz"
@@ -25,6 +26,63 @@ estados_permitidos = [
 ]
 
 cidade_bloqueada = "campinas"
+
+
+# Validação conservadora de salário: não confundir números de benefícios com remuneração.
+MONEY_NUMBER = (
+    r"(?:"
+    r"\d{1,3}(?:\.\d{3})+(?:,\d{2})?"
+    r"|\d{1,3}(?:,\d{3})+(?:\.\d{2})?"
+    r"|\d+(?:,\d{2}|\.\d{2})?"
+    r")"
+)
+SALARY_AMOUNT_RE = re.compile(
+    rf"\b(?:faixa salarial|piso salarial|sal[aá]rios?|remunera[cç][aã]o|proventos)\b"
+    rf"(?:\s+(?:fixo|base|mensal(?:\s+de)?|bruto|inicial|m[ií]nimo garantido|"
+    rf"oferecido|oferecida|oferecidos|oferecidas|de at[eé]|a partir de|entre)){{0,3}}"
+    rf"\s*(?:[:：=–—-]\s*)?"
+    rf"(?:(?:a partir de|de|entre)\s+)?"
+    rf"(?P<amount>(?:R\$\s*)?{MONEY_NUMBER})(?![\d.,])",
+    re.IGNORECASE,
+)
+
+def normalize_salary_text(text):
+    text = unicodedata.normalize("NFKD", text or "")
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+def has_real_salary(salary):
+    value = normalize_salary_text(salary)
+    if not value:
+        return False
+    placeholders = (
+        "a combinar", "nao informado", "nao informada",
+        "nao divulgado", "nao divulgada", "confidencial",
+        "negociavel", "sob consulta", "salario nao informado",
+        "salario a combinar",
+    )
+    if any(marker in value for marker in placeholders):
+        return False
+    if not re.search(r"\d", value):
+        return False
+    if not re.search(r"(?:R\$|[$€£])", value) and re.fullmatch(r"\d+", value):
+        return False
+    return True
+
+def extract_salary(structured_salary, description):
+    structured_salary = re.sub(r"\s+", " ", structured_salary or "").strip()
+    if has_real_salary(structured_salary):
+        return structured_salary
+    text = re.sub(r"<[^>]+>", " ", description or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    for match in SALARY_AMOUNT_RE.finditer(text):
+        amount = re.sub(r"\s+", " ", match.group("amount")).strip()
+        raw_number = re.sub(r"^R\$\s*", "", amount, flags=re.IGNORECASE).strip()
+        if not amount.upper().startswith("R$") and re.fullmatch(r"\d{1,2}", raw_number):
+            continue
+        return amount
+    return ""
+
 
 headers = {
     "User-Agent": "Mozilla/5.0 (compatible; FeedProcessor/1.0)"
@@ -73,6 +131,7 @@ if response.status_code == 200:
                 description = elem.findtext("description", "").strip()
                 company = elem.findtext("company/name", "").strip()
                 job_type = elem.findtext("jobType", "").strip()
+                source_salary = elem.findtext("salary", "").strip()
                 url = elem.findtext("urlDeeplink", "").strip()
 
                 location_elem = elem.find("locations/location")
@@ -91,6 +150,11 @@ if response.status_code == 200:
                     continue
 
                 if state_lower == "são paulo" and city_lower == cidade_bloqueada:
+                    elem.clear()
+                    continue
+
+                salary = extract_salary(source_salary, description)
+                if not salary:
                     elem.clear()
                     continue
 
@@ -116,6 +180,7 @@ if response.status_code == 200:
                     "slug": slug,
                     "description": descricao_final,
                     "company": company,
+                    "salary": salary,
                     "city": city,
                     "state": state,
                     "tipo": job_type,
@@ -135,6 +200,9 @@ if response.status_code == 200:
                     jobs = []
                     file_count = 2
                     break
+
+        if not jobs and file_count == 1:
+            raise SystemExit("ERRO: nenhuma vaga com remuneração válida; os arquivos existentes foram preservados.")
 
         if jobs and file_count == 1:
             json_path = os.path.join(json_folder, "part_1.json")
