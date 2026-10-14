@@ -35,6 +35,7 @@ MONEY_NUMBER = (
     r"|\d{1,3}(?:,\d{3})+(?:\.\d{2})?"
     r"|\d+(?:,\d{2}|\.\d{2})?"
     r")"
+    r"(?:\s*(?:mil|k)\b)?"
 )
 SALARY_AMOUNT_RE = re.compile(
     rf"\b(?:faixa salarial|piso salarial|sal[aá]rios?|remunera[cç][aã]o|proventos)\b"
@@ -79,11 +80,14 @@ SALARY_VALUE_RE = re.compile(
 )
 
 def parse_salary_amount(raw_amount):
-    """Converte uma quantia monetária em número, respeitando separadores."""
+    """Converte uma quantia monetária em número, respeitando separadores e sufixos."""
+    raw_value = str(raw_amount or "").strip()
+    multiplier = 1000.0 if re.search(r"\s*(?:mil|k)\b", raw_value, re.IGNORECASE) else 1.0
+    value = re.sub(r"\s*(?:mil|k)\b", "", raw_value, flags=re.IGNORECASE)
     value = re.sub(
         r"^(?:R\$|[$€£])\s*",
         "",
-        str(raw_amount or "").strip(),
+        value,
         flags=re.IGNORECASE,
     )
     value = re.sub(r"[^\d.,]", "", value)
@@ -110,7 +114,7 @@ def parse_salary_amount(raw_amount):
             value = "".join(parts[:-1]) + "." + parts[-1]
 
     try:
-        return float(value)
+        return float(value) * multiplier
     except ValueError:
         return None
 
