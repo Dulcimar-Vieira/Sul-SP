@@ -191,8 +191,8 @@ if response.status_code == 200:
                 jobs.append(job_data)
                 elem.clear()
 
-                # Limite final: apenas 100 vagas no JSON.
-                if len(jobs) >= 100:
+                # Limite final: apenas 1000 vagas no JSON.
+                if len(jobs) >= 1000:
                     json_path = os.path.join(json_folder, "part_1.json")
                     with open(json_path, "w", encoding="utf-8") as json_file:
                         json.dump(jobs, json_file, ensure_ascii=False, indent=2)
@@ -210,6 +210,6 @@ if response.status_code == 200:
                 json.dump(jobs, json_file, ensure_ascii=False, indent=2)
             print(f"✅ Último arquivo gerado com {len(jobs)} vagas")
 
-    print(f"📦 Total de vagas no JSON: {100 if file_count == 2 else len(jobs)}")
+    print(f"📦 Total de vagas no JSON: {1000 if file_count == 2 else len(jobs)}")
 else:
     print(f"Erro HTTP: {response.status_code}")
