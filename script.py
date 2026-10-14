@@ -69,6 +69,80 @@ def has_real_salary(salary):
         return False
     return True
 
+MAX_SALARY_BRL = 10000.0
+
+# Captura valores monetários no campo de salário. Os separadores brasileiros
+# (15.000,00) e internacionais (15,000.00) são aceitos.
+SALARY_VALUE_RE = re.compile(
+    rf"(?<![\w])(?:R\$\s*|[$€£]\s*)?{MONEY_NUMBER}(?![\d.,])",
+    re.IGNORECASE,
+)
+
+def parse_salary_amount(raw_amount):
+    """Converte uma quantia monetária em número, respeitando separadores."""
+    value = re.sub(
+        r"^(?:R\$|[$€£])\s*",
+        "",
+        str(raw_amount or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(r"[^\d.,]", "", value)
+    if not value:
+        return None
+
+    if "." in value and "," in value:
+        # O último separador indica os decimais.
+        if value.rfind(",") > value.rfind("."):
+            value = value.replace(".", "").replace(",", ".")
+        else:
+            value = value.replace(",", "")
+    elif "," in value:
+        left, _, right = value.rpartition(",")
+        if len(right) == 3 and left:
+            value = value.replace(",", "")
+        else:
+            value = left.replace(",", "") + "." + right
+    elif "." in value:
+        parts = value.split(".")
+        if len(parts) > 1 and len(parts[0]) <= 3 and all(len(part) == 3 for part in parts[1:]):
+            value = "".join(parts)
+        else:
+            value = "".join(parts[:-1]) + "." + parts[-1]
+
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def salary_exceeds_limit(salary, description=""):
+    """Rejeita salários acima de R$ 10.000, incluindo faixas salariais."""
+    for match in SALARY_VALUE_RE.finditer(salary or ""):
+        amount = parse_salary_amount(match.group(0))
+        if amount is not None and amount > MAX_SALARY_BRL:
+            return True
+
+    # Quando o salário vem da descrição, verifica também o segundo valor
+    # de uma faixa como "R$ 8.000 a R$ 12.000".
+    text = re.sub(r"<[^>]+>", " ", description or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    range_tail_re = re.compile(
+        rf"\s*(?:-|–|—|\ba\b|\bat[eé]\b)\s*(?:R\$\s*)?({MONEY_NUMBER})(?![\d.,])",
+        re.IGNORECASE,
+    )
+    for match in SALARY_AMOUNT_RE.finditer(text):
+        amount = parse_salary_amount(match.group("amount"))
+        if amount is not None and amount > MAX_SALARY_BRL:
+            return True
+        range_match = range_tail_re.match(text[match.end():match.end() + 100])
+        if range_match:
+            upper_amount = parse_salary_amount(range_match.group(1))
+            if upper_amount is not None and upper_amount > MAX_SALARY_BRL:
+                return True
+
+    return False
+
+
 def extract_salary(structured_salary, description):
     structured_salary = re.sub(r"\s+", " ", structured_salary or "").strip()
     if has_real_salary(structured_salary):
@@ -154,7 +228,7 @@ if response.status_code == 200:
                     continue
 
                 salary = extract_salary(source_salary, description)
-                if not salary:
+                if not salary or salary_exceeds_limit(salary, description):
                     elem.clear()
                     continue
 
