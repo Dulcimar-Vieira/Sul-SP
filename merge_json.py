@@ -46,8 +46,8 @@ if not dados_totais:
     raise SystemExit(1)
 
 # Segurança: mesmo que apareça mais de um part_*.json,
-# o resultado final nunca passa de 100 vagas.
-dados_totais = dados_totais[:100]
+# o resultado final nunca passa de 1000 vagas.
+dados_totais = dados_totais[:1000]
 
 resultado = {
     "gerado_em": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
