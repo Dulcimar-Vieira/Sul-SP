@@ -201,8 +201,6 @@ except requests.RequestException as e:
 
 if response.status_code == 200:
     with gzip.open(io.BytesIO(response.content), "rt", encoding="utf-8") as f:
-        urls_vistas = set()
-
         for event, elem in ET.iterparse(f, events=("end",)):
             if elem.tag == "job":
                 title = elem.findtext("title", "").strip()
@@ -239,11 +237,6 @@ if response.status_code == 200:
 
                 if not company:
                     company = "Confidencial"
-
-                if url in urls_vistas:
-                    elem.clear()
-                    continue
-                urls_vistas.add(url)
 
                 description = limpar_html(description)
                 intro = gerar_intro(title, city)
