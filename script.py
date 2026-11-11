@@ -15,8 +15,8 @@ feed_url = "https://feeds.whatjobs.com/sinerj/sinerj_pt_BR.xml.gz"
 json_folder = "json_parts"
 os.makedirs(json_folder, exist_ok=True)
 
-file_count = 1
-jobs = []
+jobs_with_salary = {}
+jobs_without_salary = {}
 
 estados_permitidos = [
     "são paulo",
@@ -232,9 +232,10 @@ if response.status_code == 200:
                     continue
 
                 salary = extract_salary(source_salary, description)
-                if not salary or salary_exceeds_limit(salary, description):
+                if salary_exceeds_limit(salary, description):
                     elem.clear()
                     continue
+                salary_value = salary if has_real_salary(salary) else "A combinar"
 
                 if not company:
                     company = "Confidencial"
@@ -258,7 +259,7 @@ if response.status_code == 200:
                     "slug": slug,
                     "description": descricao_final,
                     "company": company,
-                    "salary": salary,
+                    "salary": salary_value,
                     "city": city,
                     "state": state,
                     "tipo": job_type,
@@ -266,28 +267,48 @@ if response.status_code == 200:
                     "data_publicacao": data_publicacao
                 }
 
-                jobs.append(job_data)
+                url_key = url.strip().rstrip("/")
+                if has_real_salary(salary_value):
+                    target = jobs_with_salary
+                    other = jobs_without_salary
+                else:
+                    target = jobs_without_salary
+                    other = jobs_with_salary
+
+                # Se uma URL duplicada aparecer, a versão com salário prevalece.
+                if url_key in other:
+                    if has_real_salary(salary_value):
+                        other.pop(url_key, None)
+                    else:
+                        elem.clear()
+                        continue
+                if url_key not in target:
+                    target[url_key] = job_data
                 elem.clear()
 
-                # Limite final: apenas 1000 vagas no JSON.
-                if len(jobs) >= 1000:
-                    json_path = os.path.join(json_folder, "part_1.json")
-                    with open(json_path, "w", encoding="utf-8") as json_file:
-                        json.dump(jobs, json_file, ensure_ascii=False, indent=2)
-                    print(f"✅ {json_path} gerado com {len(jobs)} vagas")
-                    jobs = []
-                    file_count = 2
-                    break
+        salary_jobs = sorted(
+            jobs_with_salary.values(),
+            key=lambda job: job.get("data_publicacao", ""),
+            reverse=True,
+        )
+        no_salary_jobs = sorted(
+            jobs_without_salary.values(),
+            key=lambda job: job.get("data_publicacao", ""),
+            reverse=True,
+        )
+        selected_jobs = (salary_jobs + no_salary_jobs)[:1000]
 
-        if not jobs and file_count == 1:
-            raise SystemExit("ERRO: nenhuma vaga com remuneração válida; os arquivos existentes foram preservados.")
+        if not selected_jobs:
+            raise SystemExit("ERRO: nenhuma vaga regional válida; os arquivos existentes foram preservados.")
 
-        if jobs and file_count == 1:
-            json_path = os.path.join(json_folder, "part_1.json")
-            with open(json_path, "w", encoding="utf-8") as json_file:
-                json.dump(jobs, json_file, ensure_ascii=False, indent=2)
-            print(f"✅ Último arquivo gerado com {len(jobs)} vagas")
+        json_path = os.path.join(json_folder, "part_1.json")
+        temp_path = json_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as json_file:
+            json.dump(selected_jobs, json_file, ensure_ascii=False, indent=2)
+        os.replace(temp_path, json_path)
 
-    print(f"📦 Total de vagas no JSON: {1000 if file_count == 2 else len(jobs)}")
+        print(f"✅ Vagas com salário: {len(salary_jobs[:1000])}")
+        print(f"✅ Vagas A combinar: {min(len(no_salary_jobs), max(0, 1000 - len(salary_jobs)))}")
+        print(f"📦 Total de vagas no JSON: {len(selected_jobs)}")
 else:
     print(f"Erro HTTP: {response.status_code}")
