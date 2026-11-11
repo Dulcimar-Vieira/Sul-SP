@@ -18,12 +18,18 @@ os.makedirs(json_folder, exist_ok=True)
 jobs_with_salary = {}
 jobs_without_salary = {}
 
-estados_permitidos = [
-    "são paulo",
-    "paraná",
+estados_permitidos = {
+    "sao paulo",
+    "parana",
     "santa catarina",
-    "rio grande do sul"
-]
+    "rio grande do sul",
+}
+SIGLAS_ESTADOS = {
+    "sp": "sao paulo",
+    "pr": "parana",
+    "sc": "santa catarina",
+    "rs": "rio grande do sul",
+}
 
 cidade_bloqueada = "campinas"
 
@@ -167,7 +173,8 @@ headers = {
 }
 
 def normalizar(texto):
-    return texto.strip().lower()
+    texto = unicodedata.normalize("NFKD", (texto or "").strip().lower())
+    return "".join(char for char in texto if not unicodedata.combining(char))
 
 def gerar_id(titulo, empresa, cidade, url):
     base = f"{titulo}-{empresa}-{cidade}-{url}"
@@ -220,12 +227,13 @@ if response.status_code == 200:
 
                 city_lower = normalizar(city)
                 state_lower = normalizar(state)
+                state_lower = SIGLAS_ESTADOS.get(state_lower, state_lower)
 
                 if state_lower not in estados_permitidos:
                     elem.clear()
                     continue
 
-                if state_lower == "são paulo" and city_lower == cidade_bloqueada:
+                if state_lower == "sao paulo" and city_lower == cidade_bloqueada:
                     elem.clear()
                     continue
 
